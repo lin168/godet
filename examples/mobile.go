@@ -6,7 +6,7 @@ package main
 import "fmt"
 import "time"
 
-import "godet"
+import "github.com/lin168/godet"
 
 func main() {
 	// connect to Chrome instance

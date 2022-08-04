@@ -7,7 +7,7 @@ import (
 	"github.com/gobs/cmd/plugins/json"
 	"github.com/gobs/pretty"
 	"github.com/gobs/simplejson"
-	"godet"
+	"github.com/lin168/godet"
 
 	"flag"
 	"fmt"

@@ -14,7 +14,7 @@ import (
 	"github.com/gobs/args"
 	"github.com/gobs/pretty"
 	"github.com/gobs/simplejson"
-	"godet"
+	"github.com/lin168/godet"
 )
 
 func runCommand(commandString string) error {

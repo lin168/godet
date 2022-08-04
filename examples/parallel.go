@@ -5,7 +5,7 @@ package main
 
 import (
 	"fmt"
-	"godet"
+	"github.com/lin168/godet"
 	"sync"
 	"time"
 )
