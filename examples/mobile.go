@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -5,7 +6,7 @@ package main
 import "fmt"
 import "time"
 
-import "github.com/raff/godet"
+import "godet"
 
 func main() {
 	// connect to Chrome instance

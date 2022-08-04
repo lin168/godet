@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/gobs/httpclient"
@@ -198,46 +197,6 @@ func (err NavigationError) Error() string {
 	return "NavigationError:" + string(err)
 }
 
-// RemoteDebugger implements an interface for Chrome DevTools.
-type RemoteDebugger struct {
-	http    *httpclient.HttpClient
-	ws      *websocket.Conn
-	current string
-	reqID   int
-	verbose bool
-
-	sync.Mutex
-	closed chan bool
-
-	requests  chan Params
-	responses map[int]chan json.RawMessage
-	callbacks map[string]EventCallback
-	events    chan wsMessage
-}
-
-// Params is a type alias for the event params structure.
-type Params map[string]interface{}
-
-func (p Params) String(k string) string {
-	val, _ := p[k].(string)
-	return val
-}
-
-func (p Params) Int(k string) int {
-	val, _ := p[k].(float64)
-	return int(val)
-}
-
-func (p Params) Bool(k string) bool {
-	val, _ := p[k].(bool)
-	return val
-}
-
-func (p Params) Map(k string) map[string]interface{} {
-	val, _ := p[k].(map[string]interface{})
-	return val
-}
-
 // EventCallback represents a callback event, associated with a method.
 type EventCallback func(params Params)
 
@@ -257,113 +216,9 @@ func Headers(headers map[string]string) ConnectOption {
 	}
 }
 
-// Connect to the remote debugger and return `RemoteDebugger` object.
-func Connect(port string, verbose bool, options ...ConnectOption) (*RemoteDebugger, error) {
-	client := httpclient.NewHttpClient("http://" + port)
-
-	for _, setOption := range options {
-		setOption(client)
-	}
-
-	remote := &RemoteDebugger{
-		http:      client,
-		requests:  make(chan Params),
-		responses: map[int]chan json.RawMessage{},
-		callbacks: map[string]EventCallback{},
-		events:    make(chan wsMessage, 256),
-		closed:    make(chan bool),
-		verbose:   verbose,
-	}
-
-	// remote.http.Verbose = verbose
-	if verbose {
-		httpclient.StartLogging(false, true, false)
-	}
-
-	if err := remote.connectWs(nil); err != nil {
-		return nil, err
-	}
-
-	go remote.sendMessages()
-	go remote.processEvents()
-	return remote, nil
-}
-
-func (remote *RemoteDebugger) connectWs(tab *Tab) error {
-	if tab == nil || len(tab.WsURL) == 0 {
-		tabs, err := remote.TabList("page")
-		if err != nil {
-			return err
-		}
-
-		if len(tabs) == 0 {
-			return ErrorNoActiveTab
-		}
-
-		if tab == nil {
-			tab = tabs[0]
-		} else {
-			for _, t := range tabs {
-				if tab.ID == t.ID {
-					tab.WsURL = t.WsURL
-					break
-				}
-			}
-		}
-	}
-
-	if remote.ws != nil {
-		if tab.ID == remote.current {
-			// nothing to do
-			return nil
-		}
-
-		if remote.verbose {
-			log.Println("disconnecting from current tab, id", remote.current)
-		}
-
-		remote.Lock()
-		ws := remote.ws
-		remote.ws, remote.current = nil, ""
-		remote.Unlock()
-
-		_ = ws.Close()
-	}
-
-	if len(tab.WsURL) == 0 {
-		return ErrorNoWsURL
-	}
-
-	// check websocket connection
-	if remote.verbose {
-		log.Println("connecting to tab", tab.WsURL)
-	}
-
-	d := &websocket.Dialer{
-		ReadBufferSize:  MaxReadBufferSize,
-		WriteBufferSize: MaxWriteBufferSize,
-	}
-
-	ws, _, err := d.Dial(tab.WsURL, nil)
-	if err != nil {
-		if remote.verbose {
-			log.Println("dial error:", err)
-		}
-		return err
-	}
-
-	remote.Lock()
-	remote.ws = ws
-	remote.current = tab.ID
-	remote.Unlock()
-
-	go remote.readMessages(ws)
-	return nil
-}
-
 func (remote *RemoteDebugger) socket() (ws *websocket.Conn) {
 	remote.Lock()
-	ws = remote.ws
+	ws = remote.wsConn
 	remote.Unlock()
 	return
 }
@@ -371,8 +226,8 @@ func (remote *RemoteDebugger) socket() (ws *websocket.Conn) {
 // Close the RemoteDebugger connection.
 func (remote *RemoteDebugger) Close() (err error) {
 	remote.Lock()
-	ws := remote.ws
-	remote.ws = nil
+	ws := remote.wsConn
+	remote.wsConn = nil
 	remote.Unlock()
 
 	if ws != nil { // already closed
@@ -412,7 +267,7 @@ func (remote *RemoteDebugger) SendRequest(method string, params Params) (map[str
 // sendRawReplyRequest sends a request and returns the reply bytes.
 func (remote *RemoteDebugger) sendRawReplyRequest(method string, params Params) ([]byte, error) {
 	remote.Lock()
-	if remote.ws == nil {
+	if remote.wsConn == nil {
 		remote.Unlock()
 		return nil, ErrorClose
 	}
@@ -500,11 +355,11 @@ loop:
 				}
 			} else if message.Method != "" {
 				if remote.verbose {
-					log.Println("EVENT", message.Method, string(message.Params), len(remote.events))
+					log.Println("EVENT", message.Method, string(message.Params), len(eventChan))
 				}
 
 				remote.Lock()
-				_, ok := remote.callbacks[message.Method]
+				_, ok := callbacks[message.Method]
 				remote.Unlock()
 
 				if !ok {
@@ -512,7 +367,7 @@ loop:
 				}
 
 				select {
-				case remote.events <- message:
+				case eventChan <- message:
 
 				case <-remote.closed:
 					remoteClosed = true
@@ -540,27 +395,10 @@ loop:
 	// log.Println("exit readMessages", remoteClosed)
 
 	if remoteClosed {
-		remote.events <- wsMessage{Method: EventClosed, Params: []byte("{}")}
-		close(remote.events)
+		eventChan <- wsMessage{Method: EventClosed, Params: []byte("{}")}
+
 	} else if remote.socket() == ws { // we should still be connected but something is wrong
-		remote.events <- wsMessage{Method: EventDisconnect, Params: []byte("{}")}
-	}
-}
-
-func (remote *RemoteDebugger) processEvents() {
-	for ev := range remote.events {
-		remote.Lock()
-		cb := remote.callbacks[ev.Method]
-		remote.Unlock()
-
-		if cb != nil {
-			var params Params
-			if err := json.Unmarshal(ev.Params, &params); err != nil {
-				log.Println("unmarshal", string(ev.Params), len(ev.Params), err)
-			} else {
-				cb(params)
-			}
-		}
+		eventChan <- wsMessage{Method: EventDisconnect, Params: []byte("{}")}
 	}
 }
 
@@ -1715,13 +1553,6 @@ func (remote *RemoteDebugger) SetBypassServiceWorker(bypass bool) error {
 		"bypass": bypass,
 	})
 	return err
-}
-
-// CallbackEvent sets a callback for the specified event.
-func (remote *RemoteDebugger) CallbackEvent(method string, cb EventCallback) {
-	remote.Lock()
-	remote.callbacks[method] = cb
-	remote.Unlock()
 }
 
 // StartProfiler starts the profiler.

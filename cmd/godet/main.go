@@ -14,7 +14,7 @@ import (
 	"github.com/gobs/args"
 	"github.com/gobs/pretty"
 	"github.com/gobs/simplejson"
-	"github.com/raff/godet"
+	"godet"
 )
 
 func runCommand(commandString string) error {
@@ -144,7 +144,7 @@ func main() {
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		remote, err = godet.Connect(*port, *verbose)
+		remote, err = godet.StartCapture(*port, *verbose)
 		if err == nil {
 			break
 		}
@@ -215,17 +215,17 @@ func main() {
 		shouldWait = false
 	}
 
-	remote.CallbackEvent(godet.EventClosed, func(params godet.Params) {
+	godet.AddEventListener(godet.EventClosed, func(params godet.Params) {
 		log.Println("RemoteDebugger connection terminated.")
 		done <- true
 	})
 
-	remote.CallbackEvent("Emulation.virtualTimeBudgetExpired", func(params godet.Params) {
+	godet.AddEventListener("Emulation.virtualTimeBudgetExpired", func(params godet.Params) {
 		pwait <- true
 	})
 
 	if *requests {
-		remote.CallbackEvent("Network.requestWillBeSent", func(params godet.Params) {
+		godet.AddEventListener("Network.requestWillBeSent", func(params godet.Params) {
 			log.Println("requestWillBeSent",
 				params["type"],
 				params["documentURL"],
@@ -234,7 +234,7 @@ func main() {
 	}
 
 	if *responses {
-		remote.CallbackEvent("Network.responseReceived", func(params godet.Params) {
+		godet.AddEventListener("Network.responseReceived", func(params godet.Params) {
 			resp := params.Map("response")
 			url := resp["url"].(string)
 
@@ -261,12 +261,12 @@ func main() {
 	}
 
 	if *logev {
-		remote.CallbackEvent("Log.entryAdded", func(params godet.Params) {
+		godet.AddEventListener("Log.entryAdded", func(params godet.Params) {
 			entry := params.Map("entry")
 			log.Println("LOG", entry["type"], entry["level"], entry["text"])
 		})
 
-		remote.CallbackEvent("Runtime.consoleAPICalled", func(params godet.Params) {
+		godet.AddEventListener("Runtime.consoleAPICalled", func(params godet.Params) {
 			l := []interface{}{"CONSOLE", params["type"].(string)}
 
 			for _, a := range params["args"].([]interface{}) {
@@ -369,7 +369,7 @@ func main() {
 	if *fetch {
 		remote.EnableRequestPaused(true)
 
-		remote.CallbackEvent("Fetch.requestPaused", func(params godet.Params) {
+		godet.AddEventListener("Fetch.requestPaused", func(params godet.Params) {
 			rid := params.String("requestId")
 			nid := params.String("networkId")
 			rtype := params.String("resourceType")
@@ -399,7 +399,7 @@ func main() {
 			navigationResponse = godet.NavigationCancelAndIgnore
 		}
 
-		remote.CallbackEvent("Page.navigationRequested", func(params godet.Params) {
+		godet.AddEventListener("Page.navigationRequested", func(params godet.Params) {
 			log.Println("navigation requested for", params.String("url"), navigationResponse)
 
 			remote.ProcessNavigation(params.Int("navigationId"), navigationResponse)
@@ -418,7 +418,7 @@ func main() {
 			}
 		} // else, we just log the intercept requests
 
-		remote.CallbackEvent("Network.requestIntercepted", func(params godet.Params) {
+		godet.AddEventListener("Network.requestIntercepted", func(params godet.Params) {
 			iid := params.String("interceptionId")
 			rtype := params.String("resourceType")
 			reason := responses[rtype]

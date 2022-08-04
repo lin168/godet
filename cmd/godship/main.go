@@ -7,7 +7,7 @@ import (
 	"github.com/gobs/cmd/plugins/json"
 	"github.com/gobs/pretty"
 	"github.com/gobs/simplejson"
-	"github.com/raff/godet"
+	"godet"
 
 	"flag"
 	"fmt"
@@ -201,7 +201,7 @@ func main() {
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		remote, err = godet.Connect(*port, *verbose)
+		remote, err = godet.StartCapture(*port, *verbose)
 		if err == nil {
 			break
 		}
@@ -224,7 +224,7 @@ func main() {
 
 	fmt.Println("connected to", v.Browser, "protocol version", v.ProtocolVersion)
 
-	remote.CallbackEvent("Network.requestWillBeSent", func(params godet.Params) {
+	godet.AddEventListener("Network.requestWillBeSent", func(params godet.Params) {
 		req := params.Map("request")
 
 		fmt.Println(timestamp(), "requestWillBeSent",
@@ -237,7 +237,7 @@ func main() {
 		}
 	})
 
-	remote.CallbackEvent("Network.responseReceived", func(params godet.Params) {
+	godet.AddEventListener("Network.responseReceived", func(params godet.Params) {
 		resp := params.Map("response")
 		url := resp["url"].(string)
 

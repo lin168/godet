@@ -1,9 +1,11 @@
+//go:build ignore
 // +build ignore
+
 package main
 
 import (
 	"fmt"
-	"github.com/raff/godet"
+	"godet"
 	"sync"
 	"time"
 )
@@ -37,7 +39,7 @@ func processPage(id int, url string) {
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		remote, err = godet.Connect("localhost:9222", false)
+		remote, err = godet.StartCapture("localhost:9222", false)
 		if err == nil {
 			break
 		}
@@ -59,7 +61,7 @@ func processPage(id int, url string) {
 	// this should wait until the page request has loaded (if the page has multiple frames there
 	// may be more "frameStoppedLoading" events and the check should be more complicated)
 	//
-	remote.CallbackEvent("Page.frameStoppedLoading", func(params godet.Params) {
+	godet.AddEventListener("Page.frameStoppedLoading", func(params godet.Params) {
 		fmt.Println(id, "page loaded", params)
 		done <- true
 	})
