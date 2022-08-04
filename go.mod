@@ -1,4 +1,4 @@
-module godet
+module github.com/lin168/godet
 
 go 1.17
 
