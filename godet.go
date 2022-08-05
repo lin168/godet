@@ -333,7 +333,7 @@ loop:
 	for {
 		select {
 		case <-remote.closed:
-			remoteClosed = true
+			remoteClosed = !remoteClosed
 			break loop
 
 		default:
@@ -393,13 +393,13 @@ loop:
 	}
 
 	// log.Println("exit readMessages", remoteClosed)
-
-	if remoteClosed {
-		eventChan <- wsMessage{Method: EventClosed, Params: []byte("{}")}
-
-	} else if remote.socket() == ws { // we should still be connected but something is wrong
-		eventChan <- wsMessage{Method: EventDisconnect, Params: []byte("{}")}
-	}
+	// Close Event is not needed
+	//if remoteClosed {
+	//	eventChan <- wsMessage{Method: EventClosed, Params: []byte("{}")}
+	//
+	//} else if remote.socket() == ws { // we should still be connected but something is wrong
+	//	eventChan <- wsMessage{Method: EventDisconnect, Params: []byte("{}")}
+	//}
 }
 
 // Version returns version information (protocol, browser, etc.).
