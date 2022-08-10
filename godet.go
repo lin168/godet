@@ -217,9 +217,7 @@ func Headers(headers map[string]string) ConnectOption {
 }
 
 func (remote *RemoteDebugger) socket() (ws *websocket.Conn) {
-	remote.Lock()
 	ws = remote.wsConn
-	remote.Unlock()
 	return
 }
 
@@ -228,13 +226,16 @@ func (remote *RemoteDebugger) Close() (err error) {
 	remote.Lock()
 	ws := remote.wsConn
 	remote.wsConn = nil
-	remote.Unlock()
 
 	if ws != nil { // already closed
-		close(remote.requests)
-		close(remote.closed)
 		err = ws.Close()
+		close(remote.closed)
+		close(remote.requests)
 	}
+	remote.Unlock()
+
+	// 等待发送和接收协程退出
+	remote.wg.Wait()
 
 	if remote.verbose {
 		httpclient.StopLogging()
@@ -267,8 +268,8 @@ func (remote *RemoteDebugger) SendRequest(method string, params Params) (map[str
 // sendRawReplyRequest sends a request and returns the reply bytes.
 func (remote *RemoteDebugger) sendRawReplyRequest(method string, params Params) ([]byte, error) {
 	remote.Lock()
+	defer remote.Unlock()
 	if remote.wsConn == nil {
-		remote.Unlock()
 		return nil, ErrorClose
 	}
 
@@ -276,7 +277,6 @@ func (remote *RemoteDebugger) sendRawReplyRequest(method string, params Params) 
 	reqID := remote.reqID
 	remote.responses[reqID] = responseChan
 	remote.reqID++
-	remote.Unlock()
 
 	command := Params{
 		"id":     reqID,
@@ -287,9 +287,7 @@ func (remote *RemoteDebugger) sendRawReplyRequest(method string, params Params) 
 	remote.requests <- command
 	reply := <-responseChan
 
-	remote.Lock()
 	delete(remote.responses, reqID)
-	remote.Unlock()
 
 	return reply, nil
 }
@@ -310,6 +308,7 @@ func (remote *RemoteDebugger) sendMessages() {
 			log.Println("write message:", err)
 		}
 	}
+	remote.wg.Done()
 }
 
 func permanentError(err error) bool {
@@ -400,6 +399,7 @@ loop:
 	//} else if remote.socket() == ws { // we should still be connected but something is wrong
 	//	eventChan <- wsMessage{Method: EventDisconnect, Params: []byte("{}")}
 	//}
+	remote.wg.Done()
 }
 
 // Version returns version information (protocol, browser, etc.).

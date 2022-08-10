@@ -16,14 +16,14 @@ var remoteDebuggerList []*RemoteDebugger
 
 // RemoteDebugger implements an interface for Chrome DevTools.
 type RemoteDebugger struct {
+	sync.Mutex
 	http    *httpclient.HttpClient
 	wsConn  *websocket.Conn // websocket connection
 	current string
 	reqID   int
 	verbose bool
-
-	sync.Mutex
-	closed chan bool
+	closed  chan bool
+	wg      *sync.WaitGroup
 
 	requests  chan Params
 	responses map[int]chan json.RawMessage
@@ -152,6 +152,7 @@ func (remote *RemoteDebugger) connectWs(tab *Tab) error {
 
 	go remote.sendMessages()
 	go remote.readMessages(ws)
+	remote.wg.Add(2)
 
 	_ = remote.PageEvents(true)
 	_ = remote.NetworkEvents(true)
@@ -178,6 +179,7 @@ func StartCapture(port string, verbose bool, options ...ConnectOption) (*RemoteD
 		responses: map[int]chan json.RawMessage{},
 		closed:    make(chan bool),
 		verbose:   verbose,
+		wg:        &sync.WaitGroup{},
 	}
 
 	// remote.http.Verbose = verbose
@@ -223,6 +225,7 @@ func AddDebugger(targetId string, baseWsUrl string) error {
 		responses: map[int]chan json.RawMessage{},
 		closed:    make(chan bool),
 		verbose:   false,
+		wg:        &sync.WaitGroup{},
 	}
 
 	d := &websocket.Dialer{
@@ -246,6 +249,8 @@ func AddDebugger(targetId string, baseWsUrl string) error {
 	// 启动接收协程
 	go remote.sendMessages()
 	go remote.readMessages(ws)
+
+	remote.wg.Add(2)
 
 	// 开始接收事件
 	_ = remote.PageEvents(true)
