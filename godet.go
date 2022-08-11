@@ -197,9 +197,6 @@ func (err NavigationError) Error() string {
 	return "NavigationError:" + string(err)
 }
 
-// EventCallback represents a callback event, associated with a method.
-type EventCallback func(params Params)
-
 type ConnectOption func(c *httpclient.HttpClient)
 
 // Host set the host header
@@ -218,29 +215,6 @@ func Headers(headers map[string]string) ConnectOption {
 
 func (remote *RemoteDebugger) socket() (ws *websocket.Conn) {
 	ws = remote.wsConn
-	return
-}
-
-// Close the RemoteDebugger connection.
-func (remote *RemoteDebugger) Close() (err error) {
-	remote.Lock()
-	ws := remote.wsConn
-	remote.wsConn = nil
-
-	if ws != nil { // already closed
-		err = ws.Close()
-		close(remote.closed)
-		close(remote.requests)
-	}
-	remote.Unlock()
-
-	// 等待发送和接收协程退出
-	remote.wg.Wait()
-
-	if remote.verbose {
-		httpclient.StopLogging()
-	}
-
 	return
 }
 
@@ -267,6 +241,7 @@ func (remote *RemoteDebugger) SendRequest(method string, params Params) (map[str
 
 // sendRawReplyRequest sends a request and returns the reply bytes.
 func (remote *RemoteDebugger) sendRawReplyRequest(method string, params Params) ([]byte, error) {
+	// 加锁，避免在关闭channel之后发送命令，主要是channel操作。
 	remote.Lock()
 	defer remote.Unlock()
 	if remote.wsConn == nil {
@@ -357,9 +332,8 @@ loop:
 					log.Println("EVENT", message.Method, string(message.Params), len(eventChan))
 				}
 
-				remote.Lock()
-				_, ok := callbacks[message.Method]
-				remote.Unlock()
+				_, ok := callbacks.Load(message.Method)
+				//_, ok := callbacks[message.Method]
 
 				if !ok {
 					continue // don't queue unrequested events
@@ -380,9 +354,7 @@ loop:
 					log.Println("REPLY", message.ID, string(message.Result))
 				}
 
-				remote.Lock()
 				ch := remote.responses[message.ID]
-				remote.Unlock()
 
 				if ch != nil {
 					ch <- message.Result

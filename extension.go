@@ -2,6 +2,7 @@ package godet
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gobs/httpclient"
 	"github.com/gorilla/websocket"
 	"log"
@@ -9,7 +10,12 @@ import (
 	"sync"
 )
 
-var callbacks map[string]EventCallback
+// EventCallback represents a callback event, associated with a method.
+type EventCallback func(params Params)
+
+//var callbacks map[string]EventCallback
+var callbacks sync.Map
+
 var eventChan chan wsMessage
 var client *httpclient.HttpClient
 var remoteDebuggerList []*RemoteDebugger
@@ -17,14 +23,13 @@ var remoteDebuggerList []*RemoteDebugger
 // RemoteDebugger implements an interface for Chrome DevTools.
 type RemoteDebugger struct {
 	sync.Mutex
-	http    *httpclient.HttpClient
-	wsConn  *websocket.Conn // websocket connection
-	current string
-	reqID   int
-	verbose bool
-	closed  chan bool
-	wg      *sync.WaitGroup
-
+	http      *httpclient.HttpClient
+	wsConn    *websocket.Conn // websocket connection
+	current   string
+	reqID     int
+	verbose   bool
+	closed    chan bool
+	wg        *sync.WaitGroup
 	requests  chan Params
 	responses map[int]chan json.RawMessage
 }
@@ -69,7 +74,13 @@ func (remote *RemoteDebugger) GetTitle(requestId string) string {
 // 处理收到的事件
 func processEvents() {
 	for ev := range eventChan {
-		cb := callbacks[ev.Method]
+		load, ok := callbacks.Load(ev.Method)
+		if !ok {
+			continue
+		}
+		cb := load.(EventCallback)
+
+		//cb := callbacks[ev.Method]
 
 		if cb != nil {
 			var params Params
@@ -164,7 +175,7 @@ func (remote *RemoteDebugger) connectWs(tab *Tab) error {
 
 // StartCapture 连接当前活跃tab页，并开始接收消息
 func StartCapture(port string, verbose bool, options ...ConnectOption) (*RemoteDebugger, error) {
-	callbacks = make(map[string]EventCallback)
+	//callbacks = make(map[string]EventCallback)
 	eventChan = make(chan wsMessage, 1024)
 
 	// 创建一个到Chrome调试端口的HTTP连接，使用/json系列api
@@ -175,7 +186,7 @@ func StartCapture(port string, verbose bool, options ...ConnectOption) (*RemoteD
 
 	remote := &RemoteDebugger{
 		http:      client,
-		requests:  make(chan Params),
+		requests:  make(chan Params, 1),
 		responses: map[int]chan json.RawMessage{},
 		closed:    make(chan bool),
 		verbose:   verbose,
@@ -200,6 +211,7 @@ func StartCapture(port string, verbose bool, options ...ConnectOption) (*RemoteD
 
 // StopCapture stop service
 func StopCapture() {
+	fmt.Println(len(remoteDebuggerList))
 	for _, remote := range remoteDebuggerList {
 		_ = remote.Close()
 	}
@@ -209,7 +221,9 @@ func StopCapture() {
 
 // AddEventListener add event handler to the service
 func AddEventListener(method string, cb EventCallback) {
-	callbacks[method] = cb
+	//callbacks[method] = cb
+	callbacks.Store(method, cb)
+
 }
 
 func AddDebugger(targetId string, baseWsUrl string) error {
@@ -221,12 +235,15 @@ func AddDebugger(targetId string, baseWsUrl string) error {
 	// 创建RemoteDebugger Client
 	remote := &RemoteDebugger{
 		http:      client,
-		requests:  make(chan Params),
+		requests:  make(chan Params, 1),
 		responses: map[int]chan json.RawMessage{},
 		closed:    make(chan bool),
 		verbose:   false,
 		wg:        &sync.WaitGroup{},
 	}
+
+	// 添加到Client列表
+	remoteDebuggerList = append(remoteDebuggerList, remote)
 
 	d := &websocket.Dialer{
 		ReadBufferSize:  MaxReadBufferSize,
@@ -259,6 +276,29 @@ func AddDebugger(targetId string, baseWsUrl string) error {
 	_ = remote.SetCacheDisabled(true)
 
 	return nil
+}
+
+// Close the RemoteDebugger connection.
+func (remote *RemoteDebugger) Close() (err error) {
+	remote.Lock()
+	ws := remote.wsConn
+	remote.wsConn = nil
+
+	if ws != nil { // already closed
+		err = ws.Close()
+		close(remote.closed)
+		close(remote.requests)
+	}
+	remote.Unlock()
+
+	// 等待发送和接收协程退出
+	remote.wg.Wait()
+
+	if remote.verbose {
+		httpclient.StopLogging()
+	}
+
+	return
 }
 
 //------------------------------------------------------------------------------------------//
